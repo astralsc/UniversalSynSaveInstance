@@ -457,7 +457,7 @@ local function zigzag32(v)
 end
 
 local function splitU64(v)
-	local hi = math.floor(v / 4294967296)
+	local hi = v // 4294967296
 	return hi, v - hi * 4294967296
 end
 
@@ -3771,6 +3771,8 @@ local function synsaveinstance(...)
 		IgnoreNotArchivable = true,
 		IgnorePropertiesOfNotScriptsOnScriptsMode = false,
 		IgnoreSpecialProperties = false,
+		SpecialProperties = false,
+		ContinueOnError = false,
 
 		IsolateLocalPlayer = false, --  #service.StarterGui:GetChildren() == 0
 		IsolateLocalPlayerCharacter = false,
@@ -3820,6 +3822,9 @@ local function synsaveinstance(...)
 			Clipboard = "CopyToClipboard",
 			DecompileScripts = "Decompile",
 			FileName = "FilePath",
+			RestartOnCrash = "ContinueOnError",
+			ResumeOnCrash = "ContinueOnError",
+			SkipOnError = "ContinueOnError",
 			IgnoreArchivable = "IgnoreNotArchivable",
 			IgnoreDefaultProps = "IgnoreDefaultProperties",
 			InstancesBlacklist = "IgnoreList",
@@ -4030,6 +4035,15 @@ local function synsaveinstance(...)
 		arrayToDict(OPTIONS.IgnoreProperties),
 		arrayToDict(OPTIONS.NotCreatableFixes, true, "Folder")
 
+	local SpecialProperties = OPTIONS.SpecialProperties
+	if type(SpecialProperties) == "table" then
+		SpecialProperties = arrayToDict(SpecialProperties)
+	elseif SpecialProperties ~= false then
+		SpecialProperties = nil
+	else
+		SpecialProperties = nil
+	end
+
 	local CopyToClipboard = OPTIONS.CopyToClipboard
 	local Callback = OPTIONS.Callback
 
@@ -4151,6 +4165,8 @@ local function synsaveinstance(...)
 
 	local SharedBinaryStrings = OPTIONS.SharedBinaryStrings
 
+	local ContinueOnError = OPTIONS.ContinueOnError
+
 	local ToSaveList, ldecompile, placename, elapse_t, SaveNotCreatableWillBeEnabled, RecoveredScripts
 
 	if OPTIONS.ReadMe then
@@ -4271,6 +4287,11 @@ local function synsaveinstance(...)
 			if mode == "optimized" then -- ! NOT supported with Model file mode
 				mode = "full"
 			end
+
+		if mode == "full" and CustomOptions_valid.IgnoreDefaultProperties == nil then
+			OPTIONS.IgnoreDefaultProperties = false
+		end
+		IgnoreDefaultProperties = OPTIONS.IgnoreDefaultProperties
 
 			for _, key in
 				next,
@@ -4943,7 +4964,9 @@ local function synsaveinstance(...)
 			local GHPKey = (Category == "Enum" or Category == "Class") and Category or ValueType
 
 			if Special then
-				if property.Shadows and GHPShadowed then
+				if SpecialProperties and not SpecialProperties[PropertyName] then
+					property.CanRead = false
+				elseif property.Shadows and GHPShadowed then
 					property.CanRead = false
 				elseif gethiddenproperty and ghpDatatypeAllowed(GHPKey) then
 					local ok, result = pcall(gethiddenproperty, instance, PropertyName)
@@ -4972,7 +4995,12 @@ local function synsaveinstance(...)
 				local ok, result = pcall(index, instance, PropertyName)
 				if ok then
 					raw = result
-				elseif not (property.Shadows and GHPShadowed) and gethiddenproperty and ghpDatatypeAllowed(GHPKey) then
+				elseif
+					not (property.Shadows and GHPShadowed)
+					and gethiddenproperty
+					and ghpDatatypeAllowed(GHPKey)
+					and (not SpecialProperties or SpecialProperties[PropertyName])
+				then
 					ok, result = pcall(gethiddenproperty, instance, PropertyName)
 					ghpDatatypeReport(GHPKey, ok and not filterPropVal(result, property, Category, Optional))
 					if ok then

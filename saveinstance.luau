@@ -1,5 +1,6 @@
 --!native
 --!optimize 2
+--!nonstrict
 --!divine-intellect
 -- https://discord.gg/wx4ThpAsmw
 
@@ -465,7 +466,7 @@ local function zigzag32(v)
 end
 
 local function splitU64(v)
-	local hi = math.floor(v / 4294967296)
+	local hi = v // 4294967296
 	return hi, v - hi * 4294967296
 end
 
@@ -3682,6 +3683,8 @@ end
 --- @field IgnoreList {Instance | string} | {[Instance | string]: boolean | {[string]: boolean}} -- Objects to skip. Use an [Instance] or a class name as a key to skip that object and its children. `ClassName = false` keeps the object but skips its children. `ClassName = {Name1, Name2}` skips objects with those names. You can also pass a list of Instances or class names. ___Default:___ {CoreGui, CorePackages, Packages = false}
 --- @field MaxDepth number -- Objects nested deeper than this are moved up under their ancestor at depth `MaxDepth`, so nothing is dropped, only the nesting is lost. This stops very deep hierarchies from overflowing the stack when Roblox Studio opens the file (binary saves opened at 1740 levels deep; XML saves crashed at 1750). Use `math.huge` to disable. ___Default:___ 1000
 --- @field IgnoreSpecialProperties boolean -- Do not use the executor function `gethiddenproperty`. Other property reads still work. This can help if your executor crashes or the file is corrupted. ___Default:___ false
+--- @field SpecialProperties {string} | {[string]: boolean} | false -- Only save these special (hidden) property names. When set, special properties not in this list are skipped. Use this to avoid saving all hidden properties. `IgnoreSpecialProperties` takes priority if true. ___Default:___ false
+--- @field ContinueOnError boolean -- If saving an instance or property fails, skip it and continue instead of aborting the whole save. Failed instances are recorded so a rerun can skip them. ___Default:___ false
 --- @field AlternativeWritefile boolean -- Write the file in smaller pieces with `appendfile` instead of one `writefile` call. For binary saves, if `appendfile` fails, it uses `writefile`; if both fail, it switches to XML. ___Default:___ true
 --- @field Anonymous boolean | {Name: string?, UserId: number?} -- **RISKY:** Replace LocalPlayer.Name and UserId in the output. `true` replaces them with `"Roblox"` and `1`. You can also pass a table with `Name` and/or `UserId`. Name matching ignores case. This can also change other text or numbers that match. ___Default:___ false
 --- @field RiskyServicesDisabled {UGC: boolean?, Encoding: boolean?, Reflection: boolean?} -- Turn off services that some games may detect. `UGC` skips [UGCValidationService] (used for some hidden properties). `Encoding` skips [EncodingService]. `Reflection` skips [ReflectionService] (used for class data). Set a flag to `true` to skip that service. If you do not set `RiskyServicesDisabled` yourself, the UGC fallback turns on automatically when `gethiddenproperty` is missing. ___Default:___ {UGC = true, Encoding = false, Reflection = false}
@@ -3746,9 +3749,12 @@ end
 --- @field SavePlayerGui string -- `IsolateLocalPlayer`
 --- @field SavePlayers string -- `IsolatePlayers`
 --- @field SavePlayersData string -- `IsolatePlayers`
+--- @field RestartOnCrash string -- `ContinueOnError`
+--- @field ResumeOnCrash string -- `ContinueOnError`
 --- @field SaveScripts string -- `Decompile`
 --- @field SaveStarterPlayer string -- `IsolateStarterPlayer`
 --- @field ScriptDecompile string -- `Decompile`
+--- @field SkipOnError string -- `ContinueOnError`
 --- @field ShowProgress string -- `ShowStatus`
 --- @field Status string -- `ShowStatus`
 --- @field StatusText string -- `ShowStatus`
@@ -3806,7 +3812,9 @@ end
 -- *   SaveInstanceOptions -> options (supported properties are probed; executor sets vary)
 -- *   string   -> FilePath option
 -- *   Instance -> Object option
-local function synsaveinstance(...)
+export type SaveInstanceOptions = { [string]: any }
+
+local function synsaveinstance(...: any): string?
 	if USSI.Running then
 		return error("saveinstance is already initializing another save", 2)
 	end
@@ -3876,6 +3884,8 @@ local function synsaveinstance(...)
 		IgnoreNotArchivable = true,
 		IgnorePropertiesOfNotScriptsOnScriptsMode = false,
 		IgnoreSpecialProperties = false,
+		SpecialProperties = false,
+		ContinueOnError = false,
 
 		IsolateLocalPlayer = false, --  #service.StarterGui:GetChildren() == 0
 		IsolateLocalPlayerCharacter = false,
@@ -3960,9 +3970,12 @@ local function synsaveinstance(...)
 			SavePlayerGui = "IsolateLocalPlayer",
 			SavePlayers = "IsolatePlayers",
 			SavePlayersData = "IsolatePlayers",
+			RestartOnCrash = "ContinueOnError",
+			ResumeOnCrash = "ContinueOnError",
 			SaveScripts = "Decompile",
 			SaveStarterPlayer = "IsolateStarterPlayer",
 			ScriptDecompile = "Decompile",
+			SkipOnError = "ContinueOnError",
 			ShowProgress = "ShowStatus",
 			Status = "ShowStatus",
 			StatusText = "ShowStatus",
@@ -4193,6 +4206,15 @@ local function synsaveinstance(...)
 		arrayToDict(OPTIONS.IgnoreProperties),
 		arrayToDict(OPTIONS.NotCreatableFixes, true, "Folder")
 
+	local SpecialProperties = OPTIONS.SpecialProperties
+	if type(SpecialProperties) == "table" then
+		SpecialProperties = arrayToDict(SpecialProperties)
+	elseif SpecialProperties ~= false then
+		SpecialProperties = nil
+	else
+		SpecialProperties = nil
+	end
+
 	local CopyToClipboard = OPTIONS.CopyToClipboard
 	local Callback = OPTIONS.Callback
 
@@ -4315,6 +4337,11 @@ local function synsaveinstance(...)
 
 	local SharedBinaryStrings = OPTIONS.SharedBinaryStrings
 
+	local ContinueOnError = OPTIONS.ContinueOnError
+	local ContinueOnErrorSkip = {}
+	local ContinueOnErrorFailed = {}
+	local CONTINUE_ON_ERROR_FILE = USSI_FOLDER .. "CONTINUE_ON_ERROR.json"
+
 	local ToSaveList, ldecompile, placename, elapse_t, SaveNotCreatableWillBeEnabled, RecoveredScripts, FlattenedInfo
 
 	if OPTIONS.ReadMe then
@@ -4360,6 +4387,64 @@ local function synsaveinstance(...)
 		GHP = ExecState["ghp"] or {}
 		ExecState["ghp"] = GHP
 	end
+
+	local CONTINUE_ON_ERROR_KEY = (EXEC_STATE_KEY or "UNKNOWN") .. "_" .. tostring(game.PlaceId) .. "_" .. string.lower(tostring(OPTIONS.mode))
+	local function loadContinueOnErrorCheckpoint()
+		if not ContinueOnError or not readfile then
+			return
+		end
+		local ok, decoded = pcall(function()
+			return service.HttpService:JSONDecode(readfile(CONTINUE_ON_ERROR_FILE))
+		end)
+		if ok and type(decoded) == "table" then
+			local bucket = decoded[CONTINUE_ON_ERROR_KEY]
+			if type(bucket) == "table" then
+				for _, key in bucket do
+					if type(key) == "string" then
+						ContinueOnErrorSkip[key] = true
+					end
+				end
+			end
+		end
+	end
+
+	local function saveContinueOnErrorCheckpoint()
+		if not ContinueOnError or not writefile then
+			return
+		end
+		local ok, decoded = pcall(function()
+			return service.HttpService:JSONDecode(readfile(CONTINUE_ON_ERROR_FILE))
+		end)
+		if not ok or type(decoded) ~= "table" then
+			decoded = {}
+		end
+		local bucket = {}
+		for key in ContinueOnErrorFailed do
+			table.insert(bucket, key)
+		end
+		for key in ContinueOnErrorSkip do
+			if not ContinueOnErrorFailed[key] then
+				table.insert(bucket, key)
+			end
+		end
+		decoded[CONTINUE_ON_ERROR_KEY] = bucket
+		pcall(writefile, CONTINUE_ON_ERROR_FILE, service.HttpService:JSONEncode(decoded))
+	end
+
+	local function clearContinueOnErrorCheckpoint()
+		if not ContinueOnError or not writefile then
+			return
+		end
+		local ok, decoded = pcall(function()
+			return service.HttpService:JSONDecode(readfile(CONTINUE_ON_ERROR_FILE))
+		end)
+		if ok and type(decoded) == "table" then
+			decoded[CONTINUE_ON_ERROR_KEY] = nil
+			pcall(writefile, CONTINUE_ON_ERROR_FILE, service.HttpService:JSONEncode(decoded))
+		end
+	end
+
+	loadContinueOnErrorCheckpoint()
 
 	local function saveExecState()
 		if not writefile then
@@ -4436,6 +4521,11 @@ local function synsaveinstance(...)
 			if mode == "optimized" then -- ! NOT supported with Model file mode
 				mode = "full"
 			end
+
+		if mode == "full" and SaveInstanceOptions_valid.IgnoreDefaultProperties == nil then
+			OPTIONS.IgnoreDefaultProperties = false
+		end
+		IgnoreDefaultProperties = OPTIONS.IgnoreDefaultProperties
 
 			for _, key in
 				{
@@ -5176,7 +5266,9 @@ local function synsaveinstance(...)
 			local GHPKey = (Category == "Enum" or Category == "Class") and Category or ValueType
 
 			if Special then
-				if property.Shadows and GHPShadowed then
+				if SpecialProperties and not SpecialProperties[PropertyName] then
+					property.CanRead = false
+				elseif property.Shadows and GHPShadowed then
 					property.CanRead = false
 				elseif gethiddenproperty and ghpDatatypeAllowed(GHPKey) then
 					local ok, result = pcall(gethiddenproperty, instance, PropertyName)
@@ -5205,7 +5297,12 @@ local function synsaveinstance(...)
 				local ok, result = pcall(index, instance, PropertyName)
 				if ok then
 					raw = result
-				elseif not (property.Shadows and GHPShadowed) and gethiddenproperty and ghpDatatypeAllowed(GHPKey) then
+				elseif
+					not (property.Shadows and GHPShadowed)
+					and gethiddenproperty
+					and ghpDatatypeAllowed(GHPKey)
+					and (not SpecialProperties or SpecialProperties[PropertyName])
+				then
 					ok, result = pcall(gethiddenproperty, instance, PropertyName)
 					ghpDatatypeReport(GHPKey, ok and not filterPropVal(result, property, Category, Optional))
 					if ok then
@@ -5871,8 +5968,19 @@ local function synsaveinstance(...)
 					continue -- filtered out by collect
 				end
 
-				savebuffer[savebuffer_size] = ReturnItem(entry.tag, instance)
-				savebuffer_size += 1
+				local continueKey
+				if ContinueOnError then
+					local okName, fullName = pcall(instance.GetFullName, instance)
+					continueKey = entry.class .. "\0" .. (okName and fullName or tostring(instance))
+					if ContinueOnErrorSkip[continueKey] or ContinueOnErrorFailed[continueKey] then
+						continue
+					end
+				end
+
+				local beforeSize = savebuffer_size
+				local function processInstance()
+					savebuffer[savebuffer_size] = ReturnItem(entry.tag, instance)
+					savebuffer_size += 1
 
 				if entry.propsOnly then
 					for propName, value in entry.override.Properties do
@@ -6013,6 +6121,22 @@ local function synsaveinstance(...)
 
 				savebuffer[savebuffer_size] = "</Item>"
 				savebuffer_size += 1
+				end
+
+				if ContinueOnError then
+					local okCOE, errCOE = pcall(processInstance)
+					if not okCOE then
+						savebuffer_size = beforeSize
+						for i = savebuffer_size, #savebuffer do
+							savebuffer[i] = nil
+						end
+						ContinueOnErrorFailed[continueKey] = true
+						saveContinueOnErrorCheckpoint()
+						warn("ContinueOnError: skipped", continueKey, errCOE)
+					end
+				else
+					processInstance()
+				end
 			end
 		end
 
@@ -7172,6 +7296,8 @@ local function synsaveinstance(...)
 	if not ok then
 		return error(err, 2)
 	end
+
+	clearContinueOnErrorCheckpoint()
 
 	if OPTIONS.ShutdownWhenDone then
 		task.wait(Log10 * 2 + ExtraTime)
