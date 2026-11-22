@@ -2869,6 +2869,41 @@ do
 
 				return buffer.tostring(b)
 			end,
+			SmoothGrid = function(instance)
+				if gethiddenproperty_fallback then
+					return gethiddenproperty_fallback(instance, "SmoothGrid")
+				end
+				if gethiddenproperty then
+					local ok, result = pcall(gethiddenproperty, instance, "SmoothGrid")
+					if ok then
+						return result
+					end
+				end
+			end,
+			PhysicsGrid = function(instance)
+				if gethiddenproperty_fallback then
+					return gethiddenproperty_fallback(instance, "PhysicsGrid")
+				end
+				if gethiddenproperty then
+					local ok, result = pcall(gethiddenproperty, instance, "PhysicsGrid")
+					if ok then
+						return result
+					end
+				end
+			end,
+		},
+		TerrainRegion = {
+			SmoothGrid = function(instance)
+				if gethiddenproperty_fallback then
+					return gethiddenproperty_fallback(instance, "SmoothGrid")
+				end
+				if gethiddenproperty then
+					local ok, result = pcall(gethiddenproperty, instance, "SmoothGrid")
+					if ok then
+						return result
+					end
+				end
+			end,
 		},
 		BaseWrap = {
 			TemporaryCageMeshContent = function(instance)
@@ -3618,6 +3653,35 @@ do
 								or accessFunc
 
 							ClassProperties[ClassProperties_size] = Property
+							ClassProperties_size += 1
+						end
+					end
+				end
+			end
+
+			if NotScriptableFixClass then
+				local knownInjected = { SmoothGrid = "BinaryString", PhysicsGrid = "BinaryString" }
+				for propName, fix in NotScriptableFixClass do
+					local vtype = knownInjected[propName]
+					if vtype then
+						local found = false
+						for i = 1, ClassProperties_size - 1 do
+							if ClassProperties[i].Name == propName then
+								found = true
+								break
+							end
+						end
+						if not found then
+							ClassProperties[ClassProperties_size] = {
+								Name = propName,
+								Category = "DataType",
+								ValueType = vtype,
+								Special = true,
+								CanRead = nil,
+								Fallback = type(fix) == "function" and fix or function(instance)
+									return instance[fix]
+								end,
+							}
 							ClassProperties_size += 1
 						end
 					end
