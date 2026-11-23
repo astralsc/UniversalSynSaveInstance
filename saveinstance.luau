@@ -4149,12 +4149,7 @@ local function synsaveinstance(...: any): string?
 			end
 
 			if option then
-				local finalValue
-				if invert then
-					finalValue = not value
-				else
-					finalValue = value
-				end
+				local finalValue = if invert then not value else value
 
 				OPTIONS[option] = finalValue
 				SaveInstanceOptions_valid[option] = true
@@ -4629,11 +4624,9 @@ local function synsaveinstance(...: any): string?
 			end
 
 			local PlaceName = cachedPlaceName and (game.PlaceId .. " " .. cachedPlaceName) or game.PlaceId
-			if IsModel then
-				placename = sanitizeFileName("model " .. PlaceName .. " " .. (Object or tmp[1] or game):GetFullName())
-			else
-				placename = sanitizeFileName("place " .. PlaceName)
-			end
+			placename = if IsModel
+				then sanitizeFileName("model " .. PlaceName .. " " .. (Object or tmp[1] or game):GetFullName())
+				else sanitizeFileName("place " .. PlaceName)
 		end
 
 		if FilePath then
@@ -5029,11 +5022,9 @@ local function synsaveinstance(...: any): string?
 		end
 		for _, child in live:GetChildren() do
 			local key = nodeKey(child)
-			if node.children[key] ~= nil then
-				node.children[key] = false -- Duplicate names can't be matched reliably to live instances.
-			else
-				node.children[key] = assetNodeTree(child)
-			end
+			node.children[key] = if node.children[key] ~= nil
+				then false -- Duplicate names can't be matched reliably to live instances.
+				else assetNodeTree(child)
 		end
 		return node
 	end
@@ -6146,11 +6137,9 @@ local function synsaveinstance(...: any): string?
 						local tag, value
 						if Category == "Class" then
 							tag = "Ref"
-							if raw and refs[raw] ~= nil and not refIsInvalid(raw, ValueType) then
-								value = refs[raw]
-							else
-								value = "null"
-							end
+							value = if raw and refs[raw] ~= nil and not refIsInvalid(raw, ValueType)
+								then refs[raw]
+								else "null"
 						elseif Category == "Enum" then
 							value, tag = XML_Encoders.EnumItem(raw)
 						else

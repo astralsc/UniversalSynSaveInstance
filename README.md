@@ -68,7 +68,7 @@ The maintainers do not support or condone misuse of this software and are not re
   - [x] Avoid using `next`, `ipairs` & `pairs`
   - [x] ~~Interpolated strings instead of concat~~ Slower
   - [x] Type-checking (😩🙀)
-  - [ ] ~~`if-then-else` expressions~~ No reason to
+  - [x] `if-then-else` expressions
   - [x] Floor division
 
 - [x] Speed things up as much as possible
